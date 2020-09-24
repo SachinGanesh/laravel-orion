@@ -2,9 +2,11 @@
 
 namespace Orion\Concerns;
 
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Http\Resources\Json\ResourceCollection;
+use Illuminate\Support\Collection;
 
 trait BuildsResponses
 {
@@ -20,7 +22,7 @@ trait BuildsResponses
     }
 
     /**
-     * @param $entities
+     * @param LengthAwarePaginator|Collection $entities
      * @return ResourceCollection
      */
     public function collectionResponse($entities): ResourceCollection

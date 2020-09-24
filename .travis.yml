@@ -1,7 +1,6 @@
 language: php
 
 php:
-  - 7.1
   - 7.2
   - 7.3
   - 7.4
@@ -12,14 +11,15 @@ env:
     - LARAVEL=5.8.*
     - LARAVEL=^6.0
     - LARAVEL=^7.0
+    - LARAVEL=^8.0
 
 jobs:
   fast_finish: true
   exclude:
     - php: 7.1
-      env: LARAVEL=^6.0
-    - php: 7.1
-      env: LARAVEL=^7.0
+      env: LARAVEL=^8.0
+    - php: 7.2
+      env: LARAVEL=^8.0
     - php: 7.4
       env: LARAVEL=5.7.*
 
@@ -27,7 +27,8 @@ before_install:
   - phpenv config-rm xdebug.ini || true
 
 install:
-  - travis_retry composer require "illuminate/contracts=${LARAVEL}" --dev --prefer-dist --no-interaction --no-suggest
+  - travis_retry composer require "illuminate/contracts=${LARAVEL}" --prefer-dist --no-interaction --no-suggest
+  - if [ "${LARAVEL}" = "^8.0" ]; then travis_retry composer require "laravel/legacy-factories" --prefer-dist --no-interaction --no-suggest; fi
 
 before_script:
   - sleep 10

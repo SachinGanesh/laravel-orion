@@ -3,131 +3,265 @@
 namespace Orion\Testing;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 
 trait InteractsWithResources
 {
     /**
      * @param \Illuminate\Testing\TestResponse|\Illuminate\Foundation\Testing\TestResponse $response
-     * @param Collection|null $resources
-     * @param int $currentPage
-     * @param int $from
-     * @param int $lastPage
-     * @param int $perPage
-     * @param int|null $to
-     * @param int|null $total
+     * @param LengthAwarePaginator $paginator
+     * @param array $mergeData
+     * @param bool $exact
      */
-    protected function assertResourceListed($response, $resources, $currentPage = 1, $from = 1, $lastPage = 1, $perPage = 15, $to = null, $total = null): void
+    protected function assertResourceListed($response, LengthAwarePaginator $paginator, array $mergeData = [], bool $exact = true): void
     {
-        if (!$to) {
-            $to = $resources->count();
-        }
-
-        if (!$total) {
-            $total = $resources->count();
-        }
-
         $response->assertStatus(200);
         $response->assertJsonStructure([
             'data',
             'links' => ['first', 'last', 'prev', 'next'],
             'meta' => ['current_page', 'from', 'last_page', 'path', 'per_page', 'to', 'total']
         ]);
-        $response->assertJson([
-            'data' => $resources->map(function ($resource) {
-                return is_array($resource) ? $resource : $resource->toArray();
-            })->toArray()
-        ]);
-        $response->assertJson([
+
+        $expected = [
+            'data' => $paginator->forPage($paginator->currentPage(), $paginator->perPage())->values()->map(function ($resource) use ($mergeData) {
+                $arrayRepresentation = is_array($resource) ? $resource : $resource->fresh()->toArray();
+                $arrayRepresentation = array_merge($arrayRepresentation, $mergeData);
+
+                return $arrayRepresentation;
+            })->toArray(),
+            'links' => [
+                'first' => $this->resolveResourceLink($paginator, 1),
+                'last' => $this->resolveResourceLink($paginator, $paginator->lastPage()),
+                'prev' => $paginator->currentPage() > 1 ? $this->resolveResourceLink($paginator, $paginator->currentPage() - 1) : null,
+                'next' => $paginator->lastPage() > 1 ? $this->resolveResourceLink($paginator, $paginator->currentPage() + 1) : null,
+            ],
             'meta' => [
-                'current_page' => $currentPage,
-                'from' => $from,
-                'last_page' => $lastPage,
-                'per_page' => $perPage,
-                'to' => $to,
-                'total' => $total
+                'current_page' => $paginator->currentPage(),
+                'from' => $paginator->firstItem(),
+                'last_page' => $paginator->lastPage(),
+                'path' => $this->resolvePath($this->resolveBasePath($paginator)),
+                'per_page' => $paginator->perPage(),
+                'to' => $paginator->perPage() > $paginator->total() ? $paginator->total() : $paginator->currentPage() * $paginator->perPage(),
+                'total' => $paginator->total()
             ]
-        ]);
+        ];
+
+        if ((float) app()->version() >= 8.0) {
+            $expected['meta']['links'] = $this->buildMetaLinks($paginator);
+            $meta = $expected['meta'];
+            ksort($meta);
+            $expected['meta'] = $meta;
+        }
+
+        $this->assertResponseContent($expected, $response, $exact);
     }
 
     /**
      * @param \Illuminate\Testing\TestResponse|\Illuminate\Foundation\Testing\TestResponse $response
-     * @param Model $resource
-     * @param array $data
+     * @param Model|array $resource
+     * @param array $mergeData
+     * @param bool $exact
      */
-    protected function assertResourceShown($response, $resource, $data = []): void
+    protected function assertResourceShown($response, $resource, $mergeData = [], bool $exact = true): void
     {
         $response->assertStatus(200);
         $response->assertJsonStructure(['data']);
-        $response->assertJson(['data' => array_merge($resource->toArray(), $data)]);
+
+        $expected = ['data' => array_merge(is_array($resource) ? $resource : $resource->fresh()->toArray(), $mergeData)];
+
+        $this->assertResponseContent($expected, $response, $exact);
     }
 
     /**
      * @param \Illuminate\Testing\TestResponse|\Illuminate\Foundation\Testing\TestResponse $response
-     * @param string $table
+     * @param string $model
      * @param array $databaseData
-     * @param array $responseData
+     * @param array $mergeData
+     * @param bool $exact
      */
-    protected function assertResourceStored($response, string $table, array $databaseData, array $responseData): void
+    protected function assertResourceStored($response, string $model, array $databaseData, array $mergeData = [], bool $exact = true): void
     {
+        $this->assertDatabaseHas((new $model)->getTable(), $databaseData);
+
         $response->assertStatus(201);
         $response->assertJsonStructure(['data']);
-        $response->assertJson(['data' => $responseData]);
-        $this->assertDatabaseHas($table, $databaseData);
+
+        $resource = $model::where($databaseData)->first();
+        $expected = ['data' => array_merge($resource->toArray(), $mergeData)];
+
+        $this->assertResponseContent($expected, $response, $exact);
     }
 
     /**
      * @param \Illuminate\Testing\TestResponse|\Illuminate\Foundation\Testing\TestResponse $response
-     * @param string $table
+     * @param string $model
      * @param array $originalDatabaseData
      * @param array $updatedDatabaseData
-     * @param array $responseData
+     * @param array $mergeData
+     * @param bool $exact
      */
-    protected function assertResourceUpdated($response, string $table, array $originalDatabaseData, array $updatedDatabaseData, array $responseData): void
+    protected function assertResourceUpdated($response, string $model, array $originalDatabaseData, array $updatedDatabaseData, array $mergeData = [], bool $exact = true): void
     {
-        $response->assertStatus(200);
-        $response->assertJsonStructure(['data']);
-        $response->assertJson(['data' => $responseData]);
+        $table = (new $model)->getTable();
         $this->assertDatabaseMissing($table, $originalDatabaseData);
         $this->assertDatabaseHas($table, $updatedDatabaseData);
+
+        $response->assertStatus(200);
+        $response->assertJsonStructure(['data']);
+
+        $resource = $model::where($updatedDatabaseData)->first();
+        $expected = ['data' => array_merge($resource->toArray(), $mergeData)];
+
+        $this->assertResponseContent($expected, $response, $exact);
     }
 
     /**
      * @param \Illuminate\Testing\TestResponse|\Illuminate\Foundation\Testing\TestResponse $response
-     * @param Model $resource
+     * @param Model|array $resource
      * @param array $data
+     * @param bool $exact
      */
-    protected function assertResourceDeleted($response, $resource, $data = []): void
+    protected function assertResourceDeleted($response, $resource, $data = [], bool $exact = true): void
     {
-        $response->assertStatus(200);
-        $response->assertJsonStructure(['data']);
-        $response->assertJson(['data' => array_merge($resource->toArray(), $data)]);
         $this->assertDatabaseMissing($resource->getTable(), [$resource->getKeyName() => $resource->getKey()]);
+
+        $response->assertStatus(200);
+        $response->assertJsonStructure(['data']);
+
+        $expected = ['data' => array_merge(is_array($resource) ? $resource : $resource->toArray(), $data)];
+
+        $this->assertResponseContent($expected, $response, $exact);
     }
 
     /**
      * @param \Illuminate\Testing\TestResponse|\Illuminate\Foundation\Testing\TestResponse $response
-     * @param Model $resource
+     * @param Model|\Illuminate\Database\Eloquent\SoftDeletes|array $resource
      * @param array $data
+     * @param bool $exact
      */
-    protected function assertResourceTrashed($response, $resource, $data = []): void
+    protected function assertResourceTrashed($response, $resource, $data = [], bool $exact = true): void
     {
+        $resource = $resource->fresh();
+        if (!$resource) {
+            $this->fail('The resource was deleted, not trashed.');
+        }
+        if (is_null($resource->{$resource->getDeletedAtColumn()})) {
+            $this->fail('The resource was not trashed.');
+        }
+
         $response->assertStatus(200);
         $response->assertJsonStructure(['data']);
-        $response->assertJson(['data' => array_merge($resource->toArray(), $data)]);
-        $this->assertDatabaseHas($resource->getTable(), [$resource->getKeyName() => $resource->getKey()]);
+
+        $expected = ['data' => array_merge(is_array($resource) ? $resource : $resource->toArray(), $data)];
+
+        $this->assertResponseContent($expected, $response, $exact);
     }
 
     /**
      * @param \Illuminate\Testing\TestResponse|\Illuminate\Foundation\Testing\TestResponse $response
-     * @param Model|\Illuminate\Database\Eloquent\SoftDeletes $resource
+     * @param Model|\Illuminate\Database\Eloquent\SoftDeletes|array $resource
      * @param array $data
+     * @param bool $exact
      */
-    protected function assertResourceRestored($response, $resource, $data = []): void
+    protected function assertResourceRestored($response, $resource, $data = [], bool $exact = true): void
     {
+        $this->assertDatabaseHas($resource->getTable(), [$resource->getKeyName() => $resource->getKey(), $resource->getDeletedAtColumn() => null]);
+
         $response->assertStatus(200);
         $response->assertJsonStructure(['data']);
-        $response->assertJson(['data' => array_merge($resource->toArray(), $data)]);
-        $this->assertDatabaseHas($resource->getTable(), [$resource->getDeletedAtColumn() => null]);
+
+        $expected = ['data' => array_merge(is_array($resource) ? $resource : $resource->fresh()->toArray(), $data)];
+
+        $this->assertResponseContent($expected, $response, $exact);
+    }
+
+    protected function assertResponseContent(array $expected, $response, bool $exact)
+    {
+        if ($exact) {
+            $this->assertJsonSame($expected, $response);
+        } else {
+            $response->assertJson($expected);
+        }
+    }
+
+    protected function assertJsonSame(array $expected, $response): void
+    {
+        $actual = json_decode($response->getContent(), true);
+        $this->assertSame($expected, $actual);
+    }
+
+    protected function resolveResourceLink(LengthAwarePaginator $paginator, int $page): string
+    {
+        $path = $this->resolvePath($this->resolveBasePath($paginator));
+        return "{$path}?page={$page}";
+    }
+
+    protected function resolveBasePath(LengthAwarePaginator $paginator): string
+    {
+        if ((float) app()->version() >= 6.0) {
+            return $paginator->path();
+        }
+
+        $paginatorDescriptor = $paginator->toArray();
+        return $paginatorDescriptor['path'];
+    }
+
+    protected function resolvePath(string $basePath): string
+    {
+        return config('app.url')."/api/$basePath";
+    }
+
+    protected function buildMetaLinks(LengthAwarePaginator $paginator): array
+    {
+        $links = [
+            $this->buildMetaLink(
+                $paginator->currentPage() > 1 ? $this->resolveResourceLink($paginator, $paginator->currentPage() - 1) : null,
+                'Previous',
+                false
+            )
+        ];
+
+        for ($page = 1; $page <= $paginator->lastPage(); $page++) {
+            $links[] = $this->buildMetaLink(
+                $this->resolveResourceLink($paginator, $page),
+                $page,
+                $paginator->currentPage() === $page
+            );
+        }
+
+        $links[] = $this->buildMetaLink(
+            $paginator->lastPage() > 1 ? $this->resolveResourceLink($paginator, $paginator->currentPage() + 1) : null,
+            'Next',
+            false
+        );
+
+        return $links;
+    }
+
+    protected function buildMetaLink(?string $url, $label, bool $active): array
+    {
+        return [
+            'url' => $url,
+            'label' => $label,
+            'active' => $active
+        ];
+    }
+
+    /**
+     * @param Collection|array $items
+     * @param string $path
+     * @param int $currentPage
+     * @param int $perPage
+     * @param int|null $total
+     * @return LengthAwarePaginator
+     */
+    protected function makePaginator($items, string $path, int $currentPage = 1, int $perPage = 15, int $total = null): LengthAwarePaginator
+    {
+        if (is_array($items)) {
+            $items = collect($items);
+        }
+
+        return new LengthAwarePaginator($items, $total ?? $items->count(), $perPage, $currentPage, ['path' => $path]);
     }
 }
